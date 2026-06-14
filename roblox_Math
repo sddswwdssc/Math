@@ -1,0 +1,1475 @@
+local Math = {}
+
+local EPSILON = 1e-10
+
+local DEFAULT_MATERIAL = {}
+local INF = math.huge
+local PI = math.pi
+local TAU = 2 * math.pi
+local DEG_TO_RAD = math.pi / 180
+local RAD_TO_DEG = 180 / math.pi
+local RNG_MODULUS = 4294967296
+
+Math.EPSILON = EPSILON
+Math.INF = INF
+Math.PI = PI
+Math.TAU = TAU
+Math.DEG_TO_RAD = DEG_TO_RAD
+Math.RAD_TO_DEG = RAD_TO_DEG
+
+function Math.Clamp(value, min, max)
+	return math.min(math.max(value, min), max)
+end
+
+function Math.Sign(value)
+	return value > 0 and 1 or value < 0 and -1 or 0
+end
+
+function Math.Approximately(a, b, epsilon)
+	epsilon = epsilon or EPSILON
+	return math.abs(a - b) < epsilon
+end
+
+function Math.Remap(value, fromMin, fromMax, toMin, toMax)
+	return toMin + (value - fromMin) / (fromMax - fromMin) * (toMax - toMin)
+end
+
+Math.MapRange = function(...)
+	if _G.__MATH_DEPRECATION_WARNINGS then
+		warn("[Math] MapRange已废弃，请使用Math.Remap替代")
+	end
+	return Math.Remap(...)
+end
+
+function Math.Smoothstep(edge0, edge1, x)
+	local t = Math.Clamp((x - edge0) / (edge1 - edge0), 0, 1)
+	return t * t * (3 - 2 * t)
+end
+
+local RNG = {}
+RNG.__index = RNG
+
+function RNG.new(seed)
+	local self = setmetatable({}, RNG)
+	if seed == nil then
+
+		RNG._counter = (RNG._counter or 0) + 1
+		local base = math.floor(tick() * 1000000) % RNG_MODULUS
+		local rand = math.floor(math.random() * 1000000)
+
+		local counterHash = (RNG._counter * 0x9E3779B9) % RNG_MODULUS
+		seed = (base ~ rand ~ counterHash) % RNG_MODULUS
+	end
+	self.state0 = seed
+	self.state1 = (seed ~ 0xDEADBEEF) % RNG_MODULUS
+	for _ = 1, 8 do
+		self:NextNumber()
+	end
+	return self
+end
+
+function RNG:NextNumber()
+	local s1 = self.state0
+	local s0 = self.state1
+	self.state0 = s0
+	local s1_shift = s1 << 23
+	s1 = s1 ~ s1_shift
+	self.state1 = s1 ~ s0 ~ (s1 >> 18) ~ (s0 >> 5)
+	return (self.state1 + s0) / 4503599627370496 % 1
+end
+
+function RNG:NextInteger(min, max)
+	if not max then
+		min, max = 1, min
+	end
+	return math.floor(min + self:NextNumber() * (max - min + 1))
+end
+
+function RNG:NextFloat(min, max)
+	min = min or 0
+	max = max or 1
+	return min + self:NextNumber() * (max - min)
+end
+
+Math.RNG = RNG
+
+local globalRNG = RNG.new()
+
+function Math.Randomize(value, rng)
+	rng = rng or globalRNG
+	return (0.5 - rng:NextNumber()) * 2 * value
+end
+
+function Math.Randomize2(min, max, accuracy, rng)
+	rng = rng or globalRNG
+	local inverse = 1 / (accuracy or 1)
+	return rng:NextInteger(min * inverse, max * inverse) / inverse
+end
+
+function Math.RandomVector3(minMag, maxMag, rng)
+	rng = rng or globalRNG
+	local v = Vector3.new(
+		(0.5 - rng:NextNumber()) * 2,
+		(0.5 - rng:NextNumber()) * 2,
+		(0.5 - rng:NextNumber()) * 2
+	)
+	if v.Magnitude < EPSILON then return Vector3.zero end
+	local mag = minMag + rng:NextNumber() * (maxMag - minMag)
+	return v.Unit * mag
+end
+
+function Math.RandomPointOnSphere(radius, rng)
+	rng = rng or globalRNG
+	local theta = rng:NextNumber() * TAU
+	local phi = math.acos(2 * rng:NextNumber() - 1)
+	local r = radius or 1
+	return Vector3.new(
+		r * math.sin(phi) * math.cos(theta),
+		r * math.sin(phi) * math.sin(theta),
+		r * math.cos(phi)
+	)
+end
+
+function Math.RandomPointInCircle(radius, rng)
+	rng = rng or globalRNG
+	local angle = rng:NextNumber() * TAU
+	local r = radius * math.sqrt(rng:NextNumber())
+	return Vector3.new(r * math.cos(angle), 0, r * math.sin(angle))
+end
+
+function Math.RandomPointInCone(direction, angle, rng)
+	rng = rng or globalRNG
+	local z = 1 - rng:NextNumber() * (1 - math.cos(angle))
+	local phi = rng:NextNumber() * TAU
+	local r = math.sqrt(1 - z * z)
+	local localDir = Vector3.new(r * math.cos(phi), r * math.sin(phi), z)
+	local cf = CFrame.new(Vector3.zero, direction)
+	return (cf * CFrame.new(localDir)).LookVector
+end
+
+function Math.Normalize(v)
+	local m = v.Magnitude
+	if m > EPSILON then return v / m end
+	return Vector3.zero
+end
+
+function Math.Dot(a, b)
+	return a.X * b.X + a.Y * b.Y + a.Z * b.Z
+end
+
+function Math.Cross(a, b)
+	return Vector3.new(
+		a.Y * b.Z - a.Z * b.Y,
+		a.Z * b.X - a.X * b.Z,
+		a.X * b.Y - a.Y * b.X
+	)
+end
+
+function Math.Reflect(v, normal)
+	return v - 2 * Math.Dot(v, normal) * normal
+end
+
+function Math.Project(v, onto)
+	local ontoUnit = Math.Normalize(onto)
+	return Math.Dot(v, ontoUnit) * ontoUnit
+end
+
+function Math.ProjectOnPlane(v, planeNormal)
+	return v - Math.Dot(v, planeNormal) * planeNormal
+end
+
+function Math.Distance(a, b)
+	return (b - a).Magnitude
+end
+
+function Math.Direction(from, to)
+	return Math.Normalize(to - from)
+end
+
+function Math.AngleBetween(a, b)
+	return math.acos(Math.Clamp(Math.Dot(Math.Normalize(a), Math.Normalize(b)), -1, 1))
+end
+
+function Math.SignedAngle(from, to, axis)
+	local angle = Math.AngleBetween(from, to)
+	local cross = Math.Cross(from, to)
+	if Math.Dot(cross, axis) < 0 then
+		return -angle
+	end
+	return angle
+end
+
+function Math.MoveTowards(current, target, maxDelta)
+	local diff = target - current
+	local mag = diff.Magnitude
+	if mag <= maxDelta or mag < EPSILON then
+		return target
+	end
+	return current + diff / mag * maxDelta
+end
+
+function Math.RotateTowards(current, target, maxDegreesDelta)
+	local angle = Math.AngleBetween(current, target)
+	if angle < 1e-6 then return target end
+	local t = math.min(maxDegreesDelta * DEG_TO_RAD / angle, 1)
+	return Math.Slerp(current, target, t)
+end
+
+function Math.VectorLerp(a, b, t)
+	return a + (b - a) * t
+end
+
+function Math.Slerp(a, b, t)
+	local dot = Math.Dot(a, b)
+	if dot < 0 then
+		b = -b
+		dot = -dot
+	end
+	if dot > 0.9995 then
+		return Math.Normalize(a + (b - a) * t)
+	end
+	local theta0 = math.acos(dot)
+	local theta = theta0 * t
+	local sinTheta = math.sin(theta)
+	local sinTheta0 = math.sin(theta0)
+	local s0 = math.cos(theta) - dot * sinTheta / sinTheta0
+	local s1 = sinTheta / sinTheta0
+	return s0 * a + s1 * b
+end
+
+local function ToQuaternion(c)
+	local x, y, z, xx, yx, zx, xy, yy, zy, xz, yz, zz = c:GetComponents()
+	local tr = xx + yy + zz
+	if tr > 2.99999 then
+		return x, y, z, 0, 0, 0, 1
+	elseif tr > -0.99999 then
+		local m = 2 * (tr + 1) ^ 0.5
+		return x, y, z, (yz - zy) / m, (zx - xz) / m, (xy - yx) / m, m / 4
+	else
+		local qx = xx + yx + zx + 1
+		local qy = xy + yy + zy + 1
+		local qz = xz + yz + zz + 1
+		local m = (qx * qx + qy * qy + qz * qz) ^ 0.5
+		return x, y, z, qx / m, qy / m, qz / m, 0
+	end
+end
+
+function Math.ToQuaternion(c)
+	return ToQuaternion(c)
+end
+
+function Math.FromAxisAngle(x, y, z)
+	if not y then
+		x, y, z = x.X, x.Y, x.Z
+	end
+	local m = (x * x + y * y + z * z) ^ 0.5
+	if m > 1e-5 then
+		local si = math.sin(m / 2) / m
+		return CFrame.new(0, 0, 0, si * x, si * y, si * z, math.cos(m / 2))
+	else
+		return CFrame.new()
+	end
+end
+
+function Math.EulerToCFrame(x, y, z)
+	return CFrame.fromEulerAnglesXYZ(x, y, z)
+end
+
+function Math.CFrameToEuler(cf)
+	return cf:ToEulerAnglesXYZ()
+end
+
+function Math.Lerp(a, b, t)
+	return a + (b - a) * t
+end
+
+function Math.CFrameLerp(a, b, t)
+	return a:Lerp(b, t)
+end
+
+function Math.Interpolator(c0, c1)
+	if c1 then
+		local x0, y0, z0, qx0, qy0, qz0, qw0 = ToQuaternion(c0)
+		local x1, y1, z1, qx1, qy1, qz1, qw1 = ToQuaternion(c1)
+		local x, y, z = x1 - x0, y1 - y0, z1 - z0
+		local dot = qx0 * qx1 + qy0 * qy1 + qz0 * qz1 + qw0 * qw1
+		if dot < 0 then
+			qx0, qy0, qz0, qw0 = -qx0, -qy0, -qz0, -qw0
+			dot = -dot
+		end
+		dot = Math.Clamp(dot, -1, 1)
+		if dot > 0.9999 then
+			return function(t)
+				return CFrame.new(x0 + t * x, y0 + t * y, z0 + t * z, qx1, qy1, qz1, qw1)
+			end
+		end
+		local s = math.sqrt(1 - dot * dot)
+		local th = math.acos(dot)
+		return function(t)
+			local s0 = math.sin(th * (1 - t)) / s
+			local s1 = math.sin(th * t) / s
+			return CFrame.new(
+				x0 + t * x, y0 + t * y, z0 + t * z,
+				s0 * qx0 + s1 * qx1, s0 * qy0 + s1 * qy1,
+				s0 * qz0 + s1 * qz1, s0 * qw0 + s1 * qw1
+			)
+		end
+	else
+		local x, y, z, qx, qy, qz, qw = ToQuaternion(c0)
+		if math.abs(qw) > 0.9999 then
+			return function(t)
+				return CFrame.new(t * x, t * y, t * z, qx, qy, qz, qw)
+			end
+		end
+		local s = math.sqrt(1 - qw * qw)
+		local th = math.acos(qw)
+		return function(t)
+			local s1 = math.sin(th * t) / s
+			return CFrame.new(
+				t * x, t * y, t * z,
+				s1 * qx, s1 * qy, s1 * qz,
+				math.sin(th * (1 - t)) / s + s1 * qw
+			)
+		end
+	end
+end
+
+Math.Easing = {}
+
+function Math.Easing.Linear(t) return t end
+function Math.Easing.SineIn(t) return 1 - math.cos(t * PI / 2) end
+function Math.Easing.SineOut(t) return math.sin(t * PI / 2) end
+function Math.Easing.SineInOut(t) return -(math.cos(PI * t) - 1) / 2 end
+function Math.Easing.QuadIn(t) return t * t end
+function Math.Easing.QuadOut(t) return 1 - (1 - t) ^ 2 end
+function Math.Easing.QuadInOut(t) return t < 0.5 and 2 * t * t or 1 - (-2 * t + 2) ^ 2 / 2 end
+function Math.Easing.CubicIn(t) return t ^ 3 end
+function Math.Easing.CubicOut(t) return 1 - (1 - t) ^ 3 end
+function Math.Easing.CubicInOut(t) return t < 0.5 and 4 * t ^ 3 or 1 - (-2 * t + 2) ^ 3 / 2 end
+function Math.Easing.QuartIn(t) return t ^ 4 end
+function Math.Easing.QuartOut(t) return 1 - (1 - t) ^ 4 end
+function Math.Easing.QuartInOut(t) return t < 0.5 and 8 * t ^ 4 or 1 - (-2 * t + 2) ^ 4 / 2 end
+function Math.Easing.QuintIn(t) return t ^ 5 end
+function Math.Easing.QuintOut(t) return 1 - (1 - t) ^ 5 end
+function Math.Easing.QuintInOut(t) return t < 0.5 and 16 * t ^ 5 or 1 - (-2 * t + 2) ^ 5 / 2 end
+function Math.Easing.ExpoIn(t) return t == 0 and 0 or 2 ^ (10 * t - 10) end
+function Math.Easing.ExpoOut(t) return t == 1 and 1 or 1 - 2 ^ (-10 * t) end
+function Math.Easing.ExpoInOut(t)
+	if t == 0 then return 0 elseif t == 1 then return 1 end
+	return t < 0.5 and 2 ^ (20 * t - 10) / 2 or (2 - 2 ^ (-20 * t + 10)) / 2
+end
+function Math.Easing.CircIn(t) return 1 - math.sqrt(1 - t * t) end
+function Math.Easing.CircOut(t) return math.sqrt(1 - (t - 1) ^ 2) end
+function Math.Easing.CircInOut(t)
+	return t < 0.5 and (1 - math.sqrt(1 - 4 * t * t)) / 2 or (math.sqrt(1 - (-2 * t + 2) ^ 2) + 1) / 2
+end
+-- 别问为什么是2.70158，我也不知道，反正能用
+function Math.Easing.BackIn(t) return 2.70158 * t ^ 3 - 1.70158 * t * t end
+function Math.Easing.BackOut(t) return 1 + 2.70158 * (t - 1) ^ 3 + 1.70158 * (t - 1) ^ 2 end
+function Math.Easing.BackInOut(t)
+	local c1 = 1.70158 * 1.525
+	return t < 0.5 and ((2 * t) ^ 2 * ((c1 + 1) * 2 * t - c1)) / 2
+		or ((2 * t - 2) ^ 2 * ((c1 + 1) * (2 * t - 2) + c1) + 2) / 2
+end
+function Math.Easing.ElasticIn(t)
+	if t == 0 or t == 1 then return t end
+	return -(2 ^ (10 * t - 10)) * math.sin((t * 10 - 10.75) * TAU / 3)
+end
+function Math.Easing.ElasticOut(t)
+	if t == 0 or t == 1 then return t end
+	return 2 ^ (-10 * t) * math.sin((t * 10 - 0.75) * TAU / 3) + 1
+end
+function Math.Easing.ElasticInOut(t)
+	if t == 0 or t == 1 then return t end
+	local c5 = TAU / 4.5
+	if t < 0.5 then
+		return -(2 ^ (20 * t - 10) * math.sin((20 * t - 11.125) * c5)) / 2
+	else
+		return 2 ^ (-20 * t + 10) * math.sin((20 * t - 11.125) * c5) / 2 + 1
+	end
+end
+function Math.Easing.BounceIn(t) return 1 - Math.Easing.BounceOut(1 - t) end
+function Math.Easing.BounceOut(t)
+	local bounceAmplitude = 7.5625
+	local bounceDivisor = 2.75
+	if t < 1 / bounceDivisor then return bounceAmplitude * t * t
+	elseif t < 2 / bounceDivisor then t = t - 1.5 / bounceDivisor; return bounceAmplitude * t * t + 0.75
+	elseif t < 2.5 / bounceDivisor then t = t - 2.25 / bounceDivisor; return bounceAmplitude * t * t + 0.9375
+	else t = t - 2.625 / bounceDivisor; return bounceAmplitude * t * t + 0.984375 end
+end
+function Math.Easing.BounceInOut(t)
+	return t < 0.5 and (1 - Math.Easing.BounceOut(1 - 2 * t)) / 2
+		or (1 + Math.Easing.BounceOut(2 * t - 1)) / 2
+end
+
+function Math.Spring(initialValue, damping, speed)
+
+	damping = damping or 0.5
+	speed = speed or 10
+	local self = {
+		_target = initialValue or 0,
+		_position = initialValue or 0,
+		_velocity = 0,
+		Damping = damping,
+		Speed = speed,
+	}
+
+	function self:Update(dt)
+		local force = self.Speed * self.Speed * (self._target - self._position)
+		local dampingForce = 2 * self.Damping * self.Speed * self._velocity
+		self._velocity = self._velocity + (force - dampingForce) * dt
+		self._position = self._position + self._velocity * dt
+		return self._position
+	end
+
+	function self:Impulse(impulse)
+		self._velocity = self._velocity + impulse
+	end
+
+	function self:GetPosition() return self._position end
+	function self:GetVelocity() return self._velocity end
+	function self:GetTarget() return self._target end
+	function self:SetTarget(value) self._target = value end
+	function self:SetPosition(value) self._position = value end
+	function self:SetVelocity(value) self._velocity = value end
+
+	return self
+end
+
+function Math.VectorSpring(initial, damping, speed)
+
+	damping = damping or 0.5
+	speed = speed or 10
+	local self = {
+		_target = initial or Vector3.zero,
+		_position = initial or Vector3.zero,
+		_velocity = Vector3.zero,
+		Damping = damping,
+		Speed = speed,
+	}
+
+	function self:Update(dt)
+		local force = self.Speed * self.Speed * (self._target - self._position)
+		local dampingForce = 2 * self.Damping * self.Speed * self._velocity
+		self._velocity = self._velocity + (force - dampingForce) * dt
+		self._position = self._position + self._velocity * dt
+		return self._position
+	end
+
+	function self:Impulse(impulse)
+		self._velocity = self._velocity + impulse
+	end
+
+	function self:GetPosition() return self._position end
+	function self:GetVelocity() return self._velocity end
+	function self:GetTarget() return self._target end
+	function self:SetTarget(value) self._target = value end
+	function self:SetPosition(value) self._position = value end
+	function self:SetVelocity(value) self._velocity = value end
+
+	return self
+end
+
+function Math.SphereVsSphere(pos1, r1, pos2, r2)
+	return Math.Distance(pos1, pos2) <= r1 + r2
+end
+
+function Math.PointInBox(point, boxCenter, boxSize)
+	local half = boxSize / 2
+	return math.abs(point.X - boxCenter.X) <= half.X
+		and math.abs(point.Y - boxCenter.Y) <= half.Y
+		and math.abs(point.Z - boxCenter.Z) <= half.Z
+end
+
+function Math.RayPlaneIntersect(rayOrigin, rayDirection, planePoint, planeNormal)
+	planeNormal = Math.Normalize(planeNormal)
+	local denom = Math.Dot(planeNormal, rayDirection)
+	if math.abs(denom) < EPSILON then return nil end
+	local t = Math.Dot(planeNormal, planePoint - rayOrigin) / denom
+	if t < 0 then return nil end
+	return rayOrigin + rayDirection * t, t
+end
+
+function Math.RaySphereIntersect(rayOrigin, rayDirection, sphereCenter, sphereRadius)
+	local oc = rayOrigin - sphereCenter
+	local a = Math.Dot(rayDirection, rayDirection)
+	local b = 2 * Math.Dot(oc, rayDirection)
+	local c = Math.Dot(oc, oc) - sphereRadius * sphereRadius
+	local discriminant = b * b - 4 * a * c
+	if discriminant < 0 then return nil end
+	local t = (-b - math.sqrt(discriminant)) / (2 * a)
+	if t < 0 then t = (-b + math.sqrt(discriminant)) / (2 * a) end
+	if t < 0 then return nil end
+	return rayOrigin + rayDirection * t, t
+end
+
+function Math.ClosestPointOnSegment(point, segA, segB)
+	local ab = segB - segA
+	local dotAB = Math.Dot(ab, ab)
+	if dotAB < EPSILON then return segA, 0 end
+	local t = Math.Dot(point - segA, ab) / dotAB
+	t = Math.Clamp(t, 0, 1)
+	return segA + t * ab, t
+end
+
+function Math.ClosestPointOnLine(point, linePoint, lineDirection)
+	lineDirection = Math.Normalize(lineDirection)
+	local t = Math.Dot(point - linePoint, lineDirection)
+	return linePoint + t * lineDirection, t
+end
+
+function Math.LineVsLineClosestPoints(p1, d1, p2, d2)
+	d1 = Math.Normalize(d1)
+	d2 = Math.Normalize(d2)
+	local n = Math.Cross(d1, d2)
+	local nMag = n.Magnitude
+	if nMag < EPSILON then return p1, p2 end
+	n = n / nMag
+	local n1 = Math.Cross(d1, n)
+	local n2 = Math.Cross(d2, n)
+	local denom1 = Math.Dot(d1, n2)
+	local denom2 = Math.Dot(d2, n1)
+	if math.abs(denom1) < EPSILON or math.abs(denom2) < EPSILON then return p1, p2 end
+	local c1 = p1 + Math.Dot(p2 - p1, n2) / denom1 * d1
+	local c2 = p2 + Math.Dot(p1 - p2, n1) / denom2 * d2
+	return c1, c2
+end
+
+function Math.ProjectilePosition(origin, velocity, acceleration, time)
+	return origin + velocity * time + 0.5 * acceleration * time * time
+end
+
+function Math.ProjectileVelocity(velocity, acceleration, time)
+	return velocity + acceleration * time
+end
+
+function Math.PredictPosition(targetPos, targetVelocity, projectileSpeed, origin)
+	local offset = targetPos - origin
+	local a = targetVelocity:Dot(targetVelocity) - projectileSpeed * projectileSpeed
+	local b = 2 * targetVelocity:Dot(offset)
+	local c = offset:Dot(offset)
+	if math.abs(a) < EPSILON then
+		if math.abs(b) < EPSILON then
+			if c < EPSILON then
+				return targetPos, 0
+			end
+			return nil
+		end
+		local t = -c / b
+		if t < 0 then return nil end
+		return targetPos + targetVelocity * t, t
+	end
+	local discriminant = b * b - 4 * a * c
+	if discriminant < 0 then return nil end
+	local t = (-b - math.sqrt(discriminant)) / (2 * a)
+	if t < 0 then t = (-b + math.sqrt(discriminant)) / (2 * a) end
+	if t < 0 then return nil end
+	return targetPos + targetVelocity * t, t
+end
+
+function Math.PredictPositionWithAccel(targetPos, targetVelocity, targetAccel, projectileSpeed, origin)
+	local t = Math.Distance(origin, targetPos) / projectileSpeed
+	for _ = 1, 20 do
+		local predictedPos = targetPos + targetVelocity * t + 0.5 * targetAccel * t * t
+		local newT = Math.Distance(origin, predictedPos) / projectileSpeed
+		if math.abs(newT - t) < 0.001 then return predictedPos, newT end
+		t = newT
+	end
+	return nil
+end
+
+function Math.InterceptTime(targetPos, targetVelocity, projectileSpeed, origin)
+	return select(2, Math.PredictPosition(targetPos, targetVelocity, projectileSpeed, origin))
+end
+
+function Math.MovingTargetIntercept(origin, projectileSpeed, targetPos, targetVelocity, targetAccel)
+	local t = Math.Distance(origin, targetPos) / projectileSpeed
+	for _ = 1, 20 do
+		local predictedPos = targetPos + targetVelocity * t + 0.5 * targetAccel * t * t
+		local newT = Math.Distance(origin, predictedPos) / projectileSpeed
+		if math.abs(newT - t) < 0.001 then
+			return predictedPos, newT, (predictedPos - origin).Unit * projectileSpeed
+		end
+		t = newT
+	end
+	return nil
+end
+
+function Math.BallisticAngle(origin, target, speed, gravity)
+	gravity = gravity or workspace.Gravity
+	local delta = target - origin
+	local horizontalDist = Vector3.new(delta.X, 0, delta.Z).Magnitude
+	if horizontalDist < EPSILON then return nil end
+	local heightDiff = delta.Y
+	local speedSq = speed * speed
+	local g = gravity
+	local discriminant = speedSq * speedSq - g * (g * horizontalDist * horizontalDist + 2 * heightDiff * speedSq)
+	if discriminant < 0 then return nil end
+	local angle1 = math.atan2(speedSq - math.sqrt(discriminant), g * horizontalDist)
+	local angle2 = math.atan2(speedSq + math.sqrt(discriminant), g * horizontalDist)
+	return angle1, angle2
+end
+
+function Math.BallisticVelocity(origin, target, speed, gravity, useHighArc)
+	gravity = gravity or workspace.Gravity
+	local delta = target - origin
+	local horizontalDist = Vector3.new(delta.X, 0, delta.Z).Magnitude
+	if horizontalDist < EPSILON then return Vector3.new(0, speed, 0) end
+	local angle1, angle2 = Math.BallisticAngle(origin, target, speed, gravity)
+	local angle = useHighArc and angle2 or angle1
+	if not angle then return nil end
+	local horizontalDir = Vector3.new(delta.X, 0, delta.Z).Unit
+	return horizontalDir * math.cos(angle) * speed + Vector3.new(0, math.sin(angle) * speed, 0)
+end
+
+function Math.BallisticTimeOfFlight(velocity, gravity)
+	gravity = gravity or workspace.Gravity
+	if gravity < EPSILON then return INF end
+	return 2 * velocity.Y / gravity
+end
+
+function Math.BallisticMaxHeight(origin, velocity, gravity)
+	gravity = gravity or workspace.Gravity
+	if gravity < EPSILON then return INF end
+	return origin.Y + (velocity.Y * velocity.Y) / (2 * gravity)
+end
+
+function Math.BallisticRange(velocity, gravity, heightDiff)
+	gravity = gravity or workspace.Gravity
+	if gravity < EPSILON then return INF end
+	heightDiff = heightDiff or 0
+	local v = velocity.Magnitude
+	if v < EPSILON then return 0 end
+	local vy = velocity.Y
+	local ratio = vy / v
+
+	if ratio > 1 or ratio < -1 then
+		return nil, {code = "INVALID_INPUT", message = "velocity.Y exceeds speed magnitude"}
+	end
+	local angle = math.asin(ratio)
+	local cosAngle = math.cos(angle)
+	local sinAngle = math.sin(angle)
+	return (v * cosAngle / gravity) * (v * sinAngle + math.sqrt(v * v * sinAngle * sinAngle + 2 * gravity * heightDiff))
+end
+
+function Math.LobBallisticVelocity(origin, target, time, gravity)
+	gravity = gravity or Vector3.new(0, -workspace.Gravity, 0)
+	local displacement = target - origin
+	if time < EPSILON then return nil end
+	return (displacement - 0.5 * gravity * time * time) / time
+end
+
+function Math.BallisticTrajectory(origin, velocity, gravity, timeStep, maxTime)
+	gravity = gravity or workspace.Gravity
+	timeStep = timeStep or 0.1
+	maxTime = maxTime or 10
+	local points = {}
+	local pos = origin
+	local vel = velocity
+	local t = 0
+	local g = Vector3.new(0, -gravity, 0)
+	while t < maxTime do
+		table.insert(points, pos)
+
+		vel = vel + g * timeStep
+		pos = pos + vel * timeStep
+		t = t + timeStep
+		if pos.Y < -1000 then break end
+	end
+	return points
+end
+
+-- print("SimulateProjectile called") -- debug
+function Math.SimulateProjectile(origin, velocity, gravity, wind, drag, timeStep, maxTime)
+	gravity = gravity or workspace.Gravity
+	wind = wind or Vector3.zero
+	drag = drag or 0
+	timeStep = timeStep or 0.05
+	maxTime = maxTime or 20
+	local pos = origin
+	local vel = velocity
+	local t = 0
+	local g = Vector3.new(0, -gravity, 0)
+	local stopped = false
+
+	local function iterator()
+		if stopped or t >= maxTime or pos.Y < -1000 then return nil end
+		local result = { Position = pos, Velocity = vel, Time = t }
+		local acceleration = g + wind - drag * vel
+		vel = vel + acceleration * timeStep
+		pos = pos + vel * timeStep
+		t = t + timeStep
+		return result
+	end
+	local function stop()
+		local wasRunning = not stopped and t < maxTime and pos.Y >= -1000
+		stopped = true
+		return wasRunning
+	end
+	return iterator, stop
+end
+
+-- 这函数写了两天，别乱动
+function Math.BallisticRaycast(origin, velocity, gravity, raycastParams, timeStep, maxTime)
+	gravity = gravity or workspace.Gravity
+	timeStep = timeStep or 0.05
+	maxTime = maxTime or 10
+	local pos = origin
+	local vel = velocity
+	local t = 0
+	local g = Vector3.new(0, -gravity, 0)
+	while t < maxTime do
+		local nextPos = pos + vel * timeStep + 0.5 * g * timeStep * timeStep
+		local dir = nextPos - pos
+		local dist = dir.Magnitude
+		if dist > EPSILON then
+			local result = workspace:Raycast(pos, dir.Unit * dist, raycastParams)
+			if result then
+				local hitDist = (result.Position - pos).Magnitude
+
+				local hitTime = hitDist / dist * timeStep
+				return result, result.Position, t + hitTime
+			end
+		end
+		pos = nextPos
+		vel = vel + g * timeStep
+		t = t + timeStep
+	end
+	return nil
+end
+
+function Math.DamageFalloff(damage, distance, minDistance, maxDistance)
+	if distance <= minDistance then return damage end
+	if distance >= maxDistance then return 0 end
+	local t = (distance - minDistance) / (maxDistance - minDistance)
+	return damage * (1 - t)
+end
+
+function Math.ExplosionDamage(center, targetPos, maxDamage, maxRadius, minRadius)
+	minRadius = minRadius or 0
+	local dist = Math.Distance(center, targetPos)
+	if dist > maxRadius then return 0 end
+	if dist <= minRadius then return maxDamage end
+	local t = (dist - minRadius) / (maxRadius - minRadius)
+	return maxDamage * (1 - t)
+end
+
+local noiseState = { seed = 0, perm = {} }
+
+local function initNoisePermutation(seed)
+	local perm = {}
+	for i = 0, 255 do perm[i] = i end
+	local rng = RNG.new(seed)
+	for i = 255, 1, -1 do
+		local j = rng:NextInteger(0, i)
+		perm[i], perm[j] = perm[j], perm[i]
+	end
+	for i = 0, 255 do perm[i + 256] = perm[i] end
+	return perm
+end
+
+local function grad(hash, x, y, z)
+	local h = hash % 16
+	local u, v
+	if h < 8 then
+		u = x
+	else
+		u = y
+	end
+	if h < 4 then
+		v = y
+	elseif h == 12 or h == 14 then
+		v = x
+	else
+		v = z
+	end
+	local uVal = (h % 2) == 0 and u or -u
+	local vVal = (h % 4) < 2 and v or -v
+	return uVal + vVal
+end
+
+local function fade(t) return t * t * t * (t * (t * 6 - 15) + 10) end
+
+-- 柏林噪声，抄的wiki，能用就行
+function Math.PerlinNoise3D(x, y, z, seed)
+	seed = seed or noiseState.seed
+	local seedKey = tostring(seed)
+	if not noiseState.perm[seedKey] then
+		noiseState.perm[seedKey] = initNoisePermutation(seed)
+	end
+	local perm = noiseState.perm[seedKey]
+
+	local xi = math.floor(x) % 256
+	local yi = math.floor(y) % 256
+	local zi = math.floor(z) % 256
+	local xf = x - math.floor(x)
+	local yf = y - math.floor(y)
+	local zf = z - math.floor(z)
+	local u = fade(xf)
+	local v = fade(yf)
+	local w = fade(zf)
+
+	local function p(ix, iy, iz)
+		local idx1 = perm[xi + ix]
+		if idx1 == nil then error("Noise permutation index out of bounds: xi=" .. tostring(xi) .. ", ix=" .. tostring(ix)) end
+		local idx2 = perm[idx1 + yi + iy]
+		if idx2 == nil then error("Noise permutation index out of bounds: yi=" .. tostring(yi) .. ", iy=" .. tostring(iy)) end
+		local idx3 = perm[idx2 + zi + iz]
+		if idx3 == nil then error("Noise permutation index out of bounds: zi=" .. tostring(zi) .. ", iz=" .. tostring(iz)) end
+		return idx3
+	end
+
+	local aaa = p(0, 0, 0)
+	local aba = p(0, 1, 0)
+	local aab = p(0, 0, 1)
+	local abb = p(0, 1, 1)
+	local baa = p(1, 0, 0)
+	local bba = p(1, 1, 0)
+	local bab = p(1, 0, 1)
+	local bbb = p(1, 1, 1)
+
+	local x1 = Math.Lerp(grad(aaa, xf, yf, zf), grad(baa, xf - 1, yf, zf), u)
+	local x2 = Math.Lerp(grad(aba, xf, yf - 1, zf), grad(bba, xf - 1, yf - 1, zf), u)
+	local y1 = Math.Lerp(x1, x2, v)
+
+	local x3 = Math.Lerp(grad(aab, xf, yf, zf - 1), grad(bab, xf - 1, yf, zf - 1), u)
+	local x4 = Math.Lerp(grad(abb, xf, yf - 1, zf - 1), grad(bbb, xf - 1, yf - 1, zf - 1), u)
+	local y2 = Math.Lerp(x3, x4, v)
+
+	return (Math.Lerp(y1, y2, w) + 1) / 2
+end
+
+function Math.PerlinNoise(x, y, z, seed)
+	return Math.PerlinNoise3D(x or 0, y or 0, z or 0, seed)
+end
+
+-- FIXME: 无seed时每次结果不同，不知道算不算bug
+function Math.OctaveNoise(x, y, z, octaves, persistence, lacunarity, seed)
+	octaves = octaves or 4
+	persistence = persistence or 0.5
+	lacunarity = lacunarity or 2
+
+	if seed == nil then
+		seed = math.floor(globalRNG:NextNumber() * RNG_MODULUS)
+	end
+	local value = 0
+	local amplitude = 1
+	local frequency = 1
+	local maxValue = 0
+	for i = 1, octaves do
+		local octaveSeed = (seed ~ (i * 0x9E3779B9)) % RNG_MODULUS
+		value = value + amplitude * Math.PerlinNoise3D(x * frequency, y * frequency, z * frequency, octaveSeed)
+		maxValue = maxValue + amplitude
+		amplitude = amplitude * persistence
+		frequency = frequency * lacunarity
+	end
+	return value / maxValue
+end
+
+function Math.SetNoiseSeed(seed)
+	noiseState.seed = seed
+	local seedKey = tostring(seed)
+	noiseState.perm[seedKey] = initNoisePermutation(seed)
+end
+
+Math.MaterialProperties = {
+	[Enum.Material.Concrete] = {
+		Penetrable = false,
+		RicochetChance = 0.1,
+		SpeedRetention = 0.3,
+		DamageRetention = 0.4,
+	},
+	[Enum.Material.Wood] = {
+		Penetrable = true,
+		MaxPenetrationDepth = 0.5,
+		SpeedRetention = 0.6,
+		DamageRetention = 0.7,
+	},
+	[Enum.Material.WoodPlanks] = {
+		Penetrable = true,
+		MaxPenetrationDepth = 0.3,
+		SpeedRetention = 0.7,
+		DamageRetention = 0.75,
+	},
+	[Enum.Material.Metal] = {
+		Penetrable = false,
+		RicochetChance = 0.7,
+		RicochetAngleRandomness = 10,
+		SpeedRetention = 0.4,
+		DamageRetention = 0.3,
+		SparkOnRicochet = true,
+	},
+	[Enum.Material.Glass] = {
+		Penetrable = true,
+		MaxPenetrationDepth = 0.1,
+		SpeedRetention = 0.85,
+		DamageRetention = 0.9,
+		ShatterOnHit = true,
+	},
+	[Enum.Material.Plastic] = {
+		Penetrable = true,
+		MaxPenetrationDepth = 0.4,
+		SpeedRetention = 0.7,
+		DamageRetention = 0.75,
+	},
+	[Enum.Material.Ice] = {
+		Penetrable = false,
+		RicochetChance = 0.5,
+		SpeedRetention = 0.5,
+		DamageRetention = 0.5,
+	},
+	[Enum.Material.Fabric] = {
+		Penetrable = true,
+		MaxPenetrationDepth = 1,
+		SpeedRetention = 0.9,
+		DamageRetention = 0.95,
+	},
+	[Enum.Material.Flesh] = {
+		Penetrable = true,
+		MaxPenetrationDepth = 0.8,
+		SpeedRetention = 0.5,
+		DamageRetention = 0.6,
+		IsFlesh = true,
+	},
+	[Enum.Material.Brick] = {
+		Penetrable = false,
+		RicochetChance = 0.15,
+		SpeedRetention = 0.35,
+		DamageRetention = 0.35,
+	},
+	[Enum.Material.Slate] = {
+		Penetrable = false,
+		RicochetChance = 0.2,
+		SpeedRetention = 0.4,
+		DamageRetention = 0.4,
+	},
+	[Enum.Material.Grass] = {
+		Penetrable = true,
+		MaxPenetrationDepth = 0.6,
+		SpeedRetention = 0.8,
+		DamageRetention = 0.85,
+	},
+	[Enum.Material.Sand] = {
+		Penetrable = true,
+		MaxPenetrationDepth = 0.7,
+		SpeedRetention = 0.75,
+		DamageRetention = 0.8,
+	},
+	[Enum.Material.Snow] = {
+		Penetrable = true,
+		MaxPenetrationDepth = 0.8,
+		SpeedRetention = 0.85,
+		DamageRetention = 0.9,
+	},
+	[Enum.Material.CorrodedMetal] = {
+		Penetrable = false,
+		RicochetChance = 0.6,
+		SpeedRetention = 0.45,
+		DamageRetention = 0.35,
+		SparkOnRicochet = true,
+	},
+	[Enum.Material.Rubber] = {
+		Penetrable = true,
+		MaxPenetrationDepth = 0.3,
+		SpeedRetention = 0.65,
+		DamageRetention = 0.7,
+	},
+	[DEFAULT_MATERIAL] = {
+		Penetrable = false,
+		RicochetChance = 0.2,
+		SpeedRetention = 0.5,
+		DamageRetention = 0.5,
+	},
+}
+
+function Math.Bullet(position, velocity, damage, rng)
+	rng = rng or globalRNG
+	return {
+		Position = position or Vector3.zero,
+		Velocity = velocity or Vector3.zero,
+		Speed = velocity and velocity.Magnitude or 0,
+		Damage = damage or 0,
+		Penetrations = 0,
+		Ricochets = 0,
+		Alive = true,
+		HitList = {},
+		Trail = {},
+		_rng = rng,
+	}
+end
+
+function Math.GetMaterialProperty(material)
+	if typeof(material) == "EnumItem" then
+		return Math.MaterialProperties[material] or Math.MaterialProperties[DEFAULT_MATERIAL]
+	end
+	return Math.MaterialProperties[DEFAULT_MATERIAL]
+end
+
+function Math.ProcessHit(bullet, hitPosition, hitNormal, hitMaterial, config)
+	config = config or {}
+	local maxPenetrations = config.MaxPenetrations or 2
+	local maxRicochets = config.MaxRicochets or 3
+	local minRicochetAngle = config.MinRicochetAngle or 20
+
+	local matProp = Math.GetMaterialProperty(hitMaterial)
+	local hitAngle = math.deg(math.asin(Math.Clamp(Math.Dot(Math.Normalize(bullet.Velocity), hitNormal), -1, 1)))
+
+	if matProp.Penetrable and bullet.Penetrations < maxPenetrations then
+		local thickness = matProp.MaxPenetrationDepth or 1
+		local speedRetention = matProp.SpeedRetention ^ (thickness * 2)
+		local newSpeed = bullet.Speed * speedRetention
+		local newDamage = bullet.Damage * matProp.DamageRetention
+
+		bullet.Penetrations = bullet.Penetrations + 1
+		bullet.Velocity = Math.Normalize(bullet.Velocity) * newSpeed
+		bullet.Speed = newSpeed
+		bullet.Damage = newDamage
+
+		local penetrationOffset = math.max(0.05, math.min(bullet.Speed * (config.TimeStep or 0.02) * 0.5, 0.5))
+		bullet.Position = hitPosition + Math.Normalize(bullet.Velocity) * penetrationOffset
+
+		bullet.LastHit = {
+			Type = "Penetration",
+			Position = hitPosition,
+			Normal = hitNormal,
+			Material = hitMaterial,
+			ExitVelocity = bullet.Velocity,
+			ExitDamage = bullet.Damage,
+		}
+
+		table.insert(bullet.Trail, bullet.LastHit)
+
+		if newSpeed < 50 then
+			bullet.Alive = false
+		end
+
+		return bullet, "Penetration"
+	end
+
+	local ricochetAngle = math.abs(hitAngle)
+	if ricochetAngle > minRicochetAngle
+		and bullet.Ricochets < maxRicochets
+		and bullet._rng:NextNumber() < (matProp.RicochetChance or 0) then
+
+		local reflectDir = Math.Reflect(Math.Normalize(bullet.Velocity), hitNormal)
+		local randomness = matProp.RicochetAngleRandomness or 5
+		reflectDir = Math.RandomPointInCone(reflectDir, math.rad(randomness), bullet._rng)
+
+		local newSpeed = bullet.Speed * matProp.SpeedRetention
+		local newDamage = bullet.Damage * matProp.DamageRetention
+
+		bullet.Ricochets = bullet.Ricochets + 1
+		bullet.Velocity = reflectDir * newSpeed
+		bullet.Speed = newSpeed
+		bullet.Damage = newDamage
+		bullet.Position = hitPosition + hitNormal * 0.05
+
+		bullet.LastHit = {
+			Type = "Ricochet",
+			Position = hitPosition,
+			Normal = hitNormal,
+			Material = hitMaterial,
+			Angle = ricochetAngle,
+			ReflectDirection = reflectDir,
+			ExitVelocity = bullet.Velocity,
+			ExitDamage = bullet.Damage,
+			Spark = matProp.SparkOnRicochet or false,
+		}
+
+		table.insert(bullet.Trail, bullet.LastHit)
+
+		if newSpeed < 80 then
+			bullet.Alive = false
+		end
+
+		return bullet, "Ricochet"
+	end
+
+	bullet.Alive = false
+	bullet.Position = hitPosition
+	bullet.Velocity = Vector3.zero
+	bullet.Speed = 0
+
+	bullet.LastHit = {
+		Type = "Stop",
+		Position = hitPosition,
+		Normal = hitNormal,
+		Material = hitMaterial,
+		FinalDamage = bullet.Damage,
+	}
+
+	table.insert(bullet.Trail, bullet.LastHit)
+
+	return bullet, "Stop"
+end
+
+function Math.SimulateBullet(origin, direction, speed, damage, gravity, config)
+	gravity = gravity or workspace.Gravity
+	config = config or {}
+	local timeStep = config.TimeStep or 0.02
+	local maxTime = config.MaxTime or 20
+	local raycastParams = config.RaycastParams
+
+	local rng = config.RNG or globalRNG
+
+	local bullet = Math.Bullet(origin, direction * speed, damage, rng)
+	local vel = bullet.Velocity
+	local pos = bullet.Position
+	local t = 0
+	local g = Vector3.new(0, -gravity, 0)
+	local drag = config.Drag or 0
+	local wind = config.Wind or Vector3.zero
+
+	local events = {}
+
+	while bullet.Alive and t < maxTime and pos.Y > -2000 do
+		local nextPos = pos + vel * timeStep + 0.5 * g * timeStep * timeStep
+		local stepDir = nextPos - pos
+		local stepDist = stepDir.Magnitude
+
+		if stepDist > EPSILON then
+			local result
+			if raycastParams then
+				result = workspace:Raycast(pos, stepDir.Unit * stepDist, raycastParams)
+			end
+
+			if result then
+				local hitPos = result.Position
+				local hitNormal = result.Normal
+				local hitMaterial = result.Material
+
+				bullet.Position = hitPos
+				bullet.Velocity = vel
+				bullet.Speed = vel.Magnitude
+
+				local _, hitType = Math.ProcessHit(bullet, hitPos, hitNormal, hitMaterial, config)
+				table.insert(events, {
+					Time = t,
+					Position = hitPos,
+					Normal = hitNormal,
+					Material = hitMaterial,
+					Type = hitType,
+					Damage = bullet.Damage,
+					Penetrations = bullet.Penetrations,
+					Ricochets = bullet.Ricochets,
+					Instance = result.Instance,
+				})
+
+				if not bullet.Alive then break end
+
+				vel = bullet.Velocity
+				pos = bullet.Position
+			else
+				pos = nextPos
+			end
+		else
+			pos = nextPos
+		end
+
+		local acceleration = g + wind - drag * vel
+		vel = vel + acceleration * timeStep
+		t = t + timeStep
+	end
+
+	return events, bullet
+end
+
+function Math.GenerateBulletTrail(events, origin)
+	if not events or #events == 0 then
+		return {}
+	end
+	local points = { origin }
+	for i = 1, #events do
+		points[#points + 1] = events[i].Position
+		if events[i].Type == "Stop" then break end
+	end
+	return points
+end
+
+function Math.CanHitTargetAfterRicochet(origin, direction, speed, targetPos, ricochetSurface, ricochetNormal, gravity)
+	gravity = gravity or workspace.Gravity
+
+	local ricochetPoint, t1 = Math.RayPlaneIntersect(origin, direction, ricochetSurface, ricochetNormal)
+	if not ricochetPoint then return nil end
+
+	local reflectDir = Math.Reflect(direction, ricochetNormal)
+	local newSpeed = speed * 0.5
+	local newVelocity = reflectDir * newSpeed
+
+	local delta = targetPos - ricochetPoint
+	local horizontalDist = Vector3.new(delta.X, 0, delta.Z).Magnitude
+	if horizontalDist < EPSILON then return nil end
+
+	local speedSq = newSpeed * newSpeed
+	local g = gravity
+	local discriminant = speedSq * speedSq - g * (g * horizontalDist * horizontalDist + 2 * delta.Y * speedSq)
+	if discriminant < 0 then return nil end
+
+	local angle = math.atan2(speedSq - math.sqrt(discriminant), g * horizontalDist)
+	local launchDir = Vector3.new(delta.X, 0, delta.Z).Unit * math.cos(angle)
+	launchDir = launchDir + Vector3.new(0, math.sin(angle), 0)
+
+	if Math.AngleBetween(reflectDir, launchDir) < math.rad(30) then
+		return ricochetPoint, reflectDir, newSpeed
+	end
+
+	return nil
+end
+
+function Math.RicochetKillShot(origin, direction, speed, damage, targetPos, ricochetSurface, ricochetNormal, gravity)
+	local ricochetPoint, reflectDir, newSpeed = Math.CanHitTargetAfterRicochet(
+		origin, direction, speed, targetPos, ricochetSurface, ricochetNormal, gravity
+	)
+	if not ricochetPoint then return nil end
+
+	local distance = Math.Distance(ricochetPoint, targetPos)
+	local timeToTarget = distance / newSpeed
+
+	local newDamage = damage * 0.4
+
+	return {
+		RicochetPoint = ricochetPoint,
+		ReflectDirection = reflectDir,
+		Speed = newSpeed,
+		Damage = newDamage,
+		TimeToTarget = timeToTarget,
+		TargetPosition = targetPos,
+	}
+end
+
+function Math.FormatNumber(num, decimals)
+	decimals = decimals or 0
+	local mult = 10 ^ decimals
+	return math.floor(num * mult + 0.5) / mult
+end
+
+function Math.DegToRad(deg) return deg * DEG_TO_RAD end
+function Math.RadToDeg(rad) return rad * RAD_TO_DEG end
+
+function Math.WorldToScreen(worldPos, camera)
+	camera = camera or workspace.CurrentCamera
+	local screenPos, onScreen = camera:WorldToViewportPoint(worldPos)
+	return Vector2.new(screenPos.X, screenPos.Y), screenPos.Z, onScreen
+end
+
+-- Roblox的ViewportPointToRay在某些情况下会偏移，depth补偿一下
+function Math.ScreenToWorld(screenPos, depth, camera)
+	camera = camera or workspace.CurrentCamera
+	local ray = camera:ViewportPointToRay(screenPos.X, screenPos.Y)
+	return ray.Origin + ray.Direction * depth
+end
+
+function Math.IsOnScreen(worldPos, camera)
+	camera = camera or workspace.CurrentCamera
+	local _, _, onScreen = camera:WorldToViewportPoint(worldPos)
+	return onScreen
+end
+
+function Math.GetFrustumPlanes(camera)
+	camera = camera or workspace.CurrentCamera
+	local cf = camera.CFrame
+	local fov = camera.FieldOfView * DEG_TO_RAD / 2
+	local viewport = camera.ViewportSize
+	local aspect = viewport.X / viewport.Y
+	local near = camera.NearPlaneZ
+	local far = camera.FarPlaneZ
+
+	local tanY = math.tan(fov)
+	local tanX = tanY * aspect
+	local forward = cf.LookVector
+	local right = cf.RightVector
+	local up = cf.UpVector
+	local pos = cf.Position
+
+	local nearCenter = pos + forward * near
+	local farCenter = pos + forward * far
+	local nearH = tanY * near
+	local nearW = tanX * near
+
+	return {
+		{ Point = nearCenter, Normal = forward },
+		{ Point = farCenter, Normal = -forward },
+		{ Point = pos, Normal = Math.Normalize(nearCenter - right * nearW - pos) },
+		{ Point = pos, Normal = Math.Normalize(nearCenter + right * nearW - pos) },
+		{ Point = pos, Normal = Math.Normalize(nearCenter - up * nearH - pos) },
+		{ Point = pos, Normal = Math.Normalize(nearCenter + up * nearH - pos) },
+	}
+end
+
+function Math.IsInFrustum(worldPos, radius, camera)
+	camera = camera or workspace.CurrentCamera
+	local planes = Math.GetFrustumPlanes(camera)
+	radius = radius or 0
+	for _, plane in ipairs(planes) do
+		if Math.Dot(worldPos - plane.Point, plane.Normal) < -radius then
+			return false
+		end
+	end
+	return true
+end
+
+function Math.CirclePoint(center, radius, angle)
+	return center + Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius)
+end
+
+function Math.SpiralPoint(center, radius, angle, heightPerRadian)
+	return center + Vector3.new(
+		math.cos(angle) * radius,
+		angle * (heightPerRadian or 1),
+		math.sin(angle) * radius
+	)
+end
+
+function Math.BezierPoint(p0, p1, p2, p3, t)
+	local u = 1 - t
+	return u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3
+end
+
+function Math.BezierTangent(p0, p1, p2, p3, t)
+	local u = 1 - t
+	return Math.Normalize(3 * u * u * (p1 - p0) + 6 * u * t * (p2 - p1) + 3 * t * t * (p3 - p2))
+end
+
+function Math.CatmullRomPoint(p0, p1, p2, p3, t)
+	local tt = t * t
+	local ttt = tt * t
+	return 0.5 * ((2 * p1) + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * tt + (-p0 + 3 * p1 - 3 * p2 + p3) * ttt)
+end
+
+function Math.RigidBody(mass, position, velocity, gravity)
+	mass = mass or 1
+	position = position or Vector3.zero
+	velocity = velocity or Vector3.zero
+	gravity = gravity or Vector3.new(0, -workspace.Gravity, 0)
+
+	local body = {
+		Mass = mass,
+		Position = position,
+		Velocity = velocity,
+		Acceleration = Vector3.zero,
+		AngularVelocity = Vector3.zero,
+		Rotation = CFrame.new(position),
+		Forces = {},
+		Torques = {},
+		DragCoefficient = 0,
+		AngularDrag = 0.1,
+		UseGravity = true,
+		Gravity = gravity,
+		IsKinematic = false,
+	}
+
+	function body:AddForce(force, atPosition)
+		table.insert(self.Forces, force)
+		if atPosition then
+			local lever = atPosition - self.Position
+			table.insert(self.Torques, Math.Cross(lever, force))
+		end
+	end
+
+	function body:AddImpulse(impulse, atPosition)
+		self.Velocity = self.Velocity + impulse / self.Mass
+		if atPosition then
+			local lever = atPosition - self.Position
+			self.AngularVelocity = self.AngularVelocity + Math.Cross(lever, impulse) / self.Mass
+		end
+	end
+
+	function body:Update(dt)
+		if self.IsKinematic then return end
+
+		local totalForce = Vector3.zero
+		if self.UseGravity then
+			totalForce = totalForce + self.Gravity * self.Mass
+		end
+
+		local forces = self.Forces
+		local torques = self.Torques
+		self.Forces = {}
+		self.Torques = {}
+		for _, force in ipairs(forces) do
+			totalForce = totalForce + force
+		end
+		totalForce = totalForce - self.Velocity * self.DragCoefficient
+
+		local totalTorque = Vector3.zero
+		for _, torque in ipairs(torques) do
+			totalTorque = totalTorque + torque
+		end
+		totalTorque = totalTorque - self.AngularVelocity * self.AngularDrag
+
+		self.Acceleration = totalForce / self.Mass
+		self.Velocity = self.Velocity + self.Acceleration * dt
+		self.Position = self.Position + self.Velocity * dt
+
+		local avMag = self.AngularVelocity.Magnitude
+		if avMag > EPSILON then
+			local angle = avMag * dt
+			local axis = self.AngularVelocity / avMag
+			self.Rotation = self.Rotation * CFrame.fromAxisAngle(axis, angle)
+		end
+		self.AngularVelocity = self.AngularVelocity + totalTorque * dt
+	end
+
+	function body:Destroy()
+		self.Forces = nil
+		self.Torques = nil
+	end
+
+	return body
+end
+
+function Math.PositionRotation(cf)
+	local px, py, pz = cf.X, cf.Y, cf.Z
+	local rx, ry, rz = cf:ToEulerAnglesXYZ()
+	return Vector3.new(px, py, pz), Vector3.new(rx, ry, rz)
+end
+
+function Math.FromPositionRotation(position, rotation)
+	return CFrame.new(position) * CFrame.fromEulerAnglesXYZ(rotation.X, rotation.Y, rotation.Z)
+end
+
+function Math.RotateAroundPivot(cf, pivot, rotation)
+	if rotation == nil then return cf end
+	return pivot * rotation * pivot:Inverse() * cf
+end
+
+function Math.QuadBezier(p0, p1, p2, t)
+	t = t or 0
+	local u = 1 - t
+	return u * u * p0 + 2 * u * t * p1 + t * t * p2
+end
+
+-- 旧版用的是 math.atan2(math.sin(b-a), math.cos(b-a))，效果一样但慢
+-- local function angleDistance_old(a, b) return math.atan2(math.sin(b-a), math.cos(b-a)) end
+function Math.AngleDistance(a, b)
+	local diff = (b - a) % (2 * PI)
+	if diff > PI then diff = diff - 2 * PI end
+	return diff
+end
+
+-- 高中数学，余弦定理
+
+function Math.LawOfCosines(a, b, c)
+	local cosC = (a * a + b * b - c * c) / (2 * a * b)
+	cosC = Math.Clamp(cosC, -1, 1)
+	return math.acos(cosC)
+end
+
+-- 我知道下面这三个函数可以合并，但分开更好懂
+
+function Math.Round(value, multiple)
+	multiple = multiple or 1
+	return math.floor(value / multiple + 0.5) * multiple
+end
+
+function Math.RoundUp(value, multiple)
+	multiple = multiple or 1
+	return math.ceil(value / multiple) * multiple
+end
+
+function Math.RoundDown(value, multiple)
+	multiple = multiple or 1
+	return math.floor(value / multiple) * multiple
+end
+
+return Math
